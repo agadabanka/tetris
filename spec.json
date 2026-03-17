@@ -1,0 +1,214 @@
+{
+  "meta": {
+    "name": "Tetris",
+    "version": "1.0.0",
+    "description": "Classic falling-block puzzle game"
+  },
+
+  "config": {
+    "display": {
+      "type": "grid",
+      "width": 10,
+      "height": 20,
+      "cellSize": 30,
+      "background": "#111"
+    },
+    "timing": {
+      "tickRate": 1000,
+      "accelerates": true,
+      "accelerationFactor": 80,
+      "accelerationPer": "state.level",
+      "minTickRate": 100
+    },
+    "input": {
+      "left":     { "keys": ["ArrowLeft"] },
+      "right":    { "keys": ["ArrowRight"] },
+      "down":     { "keys": ["ArrowDown"] },
+      "rotate":   { "keys": ["ArrowUp"] },
+      "hardDrop": { "keys": [" "] },
+      "restart":  { "keys": ["r", "R"] }
+    }
+  },
+
+  "componentTypes": {
+    "Position": {
+      "fields": {
+        "x": { "type": "int", "default": 0 },
+        "y": { "type": "int", "default": 0 }
+      }
+    },
+    "PieceData": {
+      "fields": {
+        "shape": { "type": "vec2[]" },
+        "pieceType": { "type": "string" },
+        "rotation": { "type": "int", "default": 0 }
+      }
+    },
+    "Active": {
+      "fields": {}
+    },
+    "Board": {
+      "fields": {
+        "grid": {
+          "type": "grid",
+          "dimensions": { "widthRef": "config.display.width", "heightRef": "config.display.height" }
+        }
+      }
+    }
+  },
+
+  "pieces": {
+    "I": { "shape": [[0,0],[1,0],[2,0],[3,0]], "color": "#00f0f0" },
+    "O": { "shape": [[0,0],[1,0],[0,1],[1,1]], "color": "#f0f000" },
+    "T": { "shape": [[0,0],[1,0],[2,0],[1,1]], "color": "#a000f0" },
+    "S": { "shape": [[1,0],[2,0],[0,1],[1,1]], "color": "#00f000" },
+    "Z": { "shape": [[0,0],[1,0],[1,1],[2,1]], "color": "#f00000" },
+    "L": { "shape": [[0,0],[0,1],[1,0],[2,0]], "color": "#f0a000" },
+    "J": { "shape": [[0,0],[1,0],[2,0],[2,1]], "color": "#0000f0" }
+  },
+
+  "archetypes": {
+    "activePiece": {
+      "singleton": true,
+      "components": {
+        "Position": { "x": 3, "y": 0 },
+        "PieceData": { "shape": [], "pieceType": "", "rotation": 0 },
+        "Active": {}
+      }
+    },
+    "board": {
+      "singleton": true,
+      "components": {
+        "Board": {}
+      }
+    }
+  },
+
+  "resources": {
+    "state": {
+      "score": 0,
+      "level": 1,
+      "lines": 0,
+      "gameOver": false
+    },
+    "nextPiece": {
+      "type": ""
+    }
+  },
+
+  "systems": [
+    {
+      "name": "spawn",
+      "type": "spawn",
+      "config": {
+        "archetype": "activePiece",
+        "pieceSource": "pieces",
+        "spawnWhen": "noActive",
+        "positionX": "center",
+        "gameOverOnCollision": true
+      }
+    },
+    {
+      "name": "input",
+      "type": "input",
+      "config": {
+        "target": "activePiece",
+        "actions": {
+          "left":     { "move": [-1, 0], "collisionCheck": true },
+          "right":    { "move": [1, 0],  "collisionCheck": true },
+          "down":     { "move": [0, 1],  "collisionCheck": true, "scorePerCell": 1 },
+          "rotate":   { "rotate": "cw",  "collisionCheck": true },
+          "hardDrop": { "dropToBottom": true, "scorePerCell": 2, "emits": "lockPiece" }
+        }
+      }
+    },
+    {
+      "name": "gravity",
+      "type": "timer",
+      "config": {
+        "target": "activePiece",
+        "action": { "move": [0, 1] },
+        "onBlocked": { "emits": "lockPiece" },
+        "intervalRef": "config.timing.tickRate"
+      }
+    },
+    {
+      "name": "lock",
+      "type": "gridLock",
+      "on": "lockPiece",
+      "config": {
+        "source": "activePiece",
+        "target": "board",
+        "destroySource": true
+      },
+      "emits": "pieceLocked"
+    },
+    {
+      "name": "lineClear",
+      "type": "lineClear",
+      "on": "pieceLocked",
+      "config": {
+        "target": "board",
+        "direction": "horizontal",
+        "clearWhen": "rowFull",
+        "collapseAbove": true
+      },
+      "emits": "linesCleared"
+    },
+    {
+      "name": "scoring",
+      "type": "scoring",
+      "on": "linesCleared",
+      "config": {
+        "resource": "state",
+        "lineScores": [0, 100, 300, 500, 800],
+        "multiplier": "state.level"
+      }
+    },
+    {
+      "name": "levelUp",
+      "type": "levelUp",
+      "on": "linesCleared",
+      "config": {
+        "resource": "state",
+        "linesPerLevel": 10,
+        "speedFormula": "max(minTickRate, tickRate - level * accelerationFactor)"
+      }
+    },
+    {
+      "name": "gameOver",
+      "type": "gameOver",
+      "config": {
+        "condition": "state.gameOver"
+      }
+    },
+    {
+      "name": "render",
+      "type": "render",
+      "config": {
+        "layers": [
+          { "type": "grid" },
+          { "type": "activePiece", "ghost": true },
+          { "type": "preview" },
+          { "type": "hud", "fields": ["score", "level", "lines"] },
+          { "type": "gameOver" }
+        ]
+      }
+    }
+  ],
+
+  "rules": [
+    {
+      "when": { "event": "linesCleared" },
+      "then": { "increment": { "state.lines": "event.count" } }
+    },
+    {
+      "when": { "condition": "state.lines >= state.level * 10" },
+      "then": { "increment": { "state.level": 1 } }
+    },
+    {
+      "when": { "event": "gameOver" },
+      "then": { "set": { "state.gameOver": true } }
+    }
+  ]
+}
