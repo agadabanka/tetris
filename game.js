@@ -18,6 +18,7 @@ import {
   drawPreview, drawHUD, drawGameOver,
 } from '@engine/render';
 import { drawTouchOverlay } from '@engine/touch';
+import { pickBestMove } from '@engine/ai';
 
 // ── Constants ───────────────────────────────────────────────────────
 
@@ -239,6 +240,161 @@ game.system('gravity', function gravitySystem(world, dt) {
     lockPiece(world, eid);
   }
 });
+
+// ── AI Auto-Play System ─────────────────────────────────────────────
+
+const AI_MOVE_DELAY = 80; // ms between AI actions (fast but visible)
+
+game.resource('_ai', { elapsed: 0, targetX: -1, targetRot: 0, decided: false });
+
+game.system('ai', function aiSystem(world, dt) {
+  const state = world.getResource('state');
+  if (state.gameOver) return;
+
+  const active = world.query('ActivePiece', 'Position');
+  if (active.length === 0) return;
+
+  const ai = world.getResource('_ai');
+  const eid = active[0];
+  const pos = world.getComponent(eid, 'Position');
+  const piece = world.getComponent(eid, 'ActivePiece');
+  const board = world.getResource('_board');
+
+  // Decide target placement when new piece appears
+  if (!ai.decided) {
+    const best = findBestPlacement(piece.shape, board.grid, COLS, ROWS);
+    ai.targetX = best.x;
+    ai.targetRot = best.rotation;
+    ai.decided = true;
+    ai.elapsed = 0;
+  }
+
+  ai.elapsed += dt;
+  if (ai.elapsed < AI_MOVE_DELAY) return;
+  ai.elapsed = 0;
+
+  // Step 1: Rotate to target rotation
+  const currentRot = piece.rotation % 4;
+  if (currentRot !== ai.targetRot) {
+    const rotated = rotateShape(piece.shape, 1);
+    const kicks = [0, -1, 1, -2, 2];
+    for (const dx of kicks) {
+      const cells = getAbsCells(rotated, { x: pos.x + dx, y: pos.y });
+      if (!collides(board.grid, cells, COLS, ROWS)) {
+        piece.shape = rotated;
+        pos.x += dx;
+        piece.rotation = (piece.rotation + 1) % 4;
+        return;
+      }
+    }
+    // Can't rotate, skip
+    ai.targetRot = currentRot;
+    return;
+  }
+
+  // Step 2: Move left/right to target X
+  if (pos.x < ai.targetX) {
+    const cells = getAbsCells(piece.shape, { x: pos.x + 1, y: pos.y });
+    if (!collides(board.grid, cells, COLS, ROWS)) pos.x += 1;
+    return;
+  }
+  if (pos.x > ai.targetX) {
+    const cells = getAbsCells(piece.shape, { x: pos.x - 1, y: pos.y });
+    if (!collides(board.grid, cells, COLS, ROWS)) pos.x -= 1;
+    return;
+  }
+
+  // Step 3: Hard drop
+  const dropY = ghostY(piece.shape, pos, board.grid, COLS, ROWS);
+  state.score += (dropY - pos.y) * 2;
+  pos.y = dropY;
+  lockPiece(world, eid);
+  ai.decided = false;
+});
+
+// Evaluate all possible placements and pick the best one
+function findBestPlacement(shape, grid, cols, rows) {
+  let bestScore = -Infinity;
+  let bestX = Math.floor(cols / 2);
+  let bestRot = 0;
+
+  for (let rot = 0; rot < 4; rot++) {
+    let s = shape;
+    for (let r = 0; r < rot; r++) s = rotateShape(s, 1);
+
+    for (let x = -2; x < cols + 2; x++) {
+      // Find drop position
+      let y = 0;
+      while (!collides(grid, getAbsCells(s, { x, y: y + 1 }), cols, rows)) y++;
+      const cells = getAbsCells(s, { x, y });
+      if (collides(grid, cells, cols, rows)) continue;
+
+      // Score the placement
+      const score = evaluatePlacement(grid, cells, cols, rows);
+      if (score > bestScore) {
+        bestScore = score;
+        bestX = x;
+        bestRot = rot;
+      }
+    }
+  }
+  return { x: bestX, rotation: bestRot };
+}
+
+// Heuristic: minimize holes, maximize lines cleared, keep surface low and flat
+function evaluatePlacement(grid, cells, cols, rows) {
+  // Simulate locking
+  const testGrid = grid.map(row => [...row]);
+  for (const [x, y] of cells) {
+    if (y >= 0 && y < rows && x >= 0 && x < cols) testGrid[y][x] = '#';
+  }
+
+  // Count complete lines
+  let linesCleared = 0;
+  for (let r = rows - 1; r >= 0; r--) {
+    if (testGrid[r].every(c => c !== null)) linesCleared++;
+  }
+
+  // Count holes (empty cell with filled cell above)
+  let holes = 0;
+  for (let c = 0; c < cols; c++) {
+    let foundFilled = false;
+    for (let r = 0; r < rows; r++) {
+      if (testGrid[r][c] !== null) foundFilled = true;
+      else if (foundFilled) holes++;
+    }
+  }
+
+  // Aggregate height
+  let totalHeight = 0;
+  let maxHeight = 0;
+  for (let c = 0; c < cols; c++) {
+    for (let r = 0; r < rows; r++) {
+      if (testGrid[r][c] !== null) {
+        const h = rows - r;
+        totalHeight += h;
+        if (h > maxHeight) maxHeight = h;
+        break;
+      }
+    }
+  }
+
+  // Bumpiness (height difference between adjacent columns)
+  let bumpiness = 0;
+  const heights = [];
+  for (let c = 0; c < cols; c++) {
+    let h = 0;
+    for (let r = 0; r < rows; r++) {
+      if (testGrid[r][c] !== null) { h = rows - r; break; }
+    }
+    heights.push(h);
+  }
+  for (let c = 0; c < cols - 1; c++) {
+    bumpiness += Math.abs(heights[c] - heights[c + 1]);
+  }
+
+  return linesCleared * 100 - holes * 40 - totalHeight * 1.5 - bumpiness * 3;
+}
 
 // ── Lock Piece Helper ───────────────────────────────────────────────
 
