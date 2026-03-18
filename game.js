@@ -17,6 +17,7 @@ import {
   clearCanvas, drawBorder, drawGridBoard, drawPieceCells,
   drawPreview, drawHUD, drawGameOver,
 } from '@engine/render';
+import { drawTouchOverlay } from '@engine/touch';
 
 // ── Constants ───────────────────────────────────────────────────────
 
@@ -338,6 +339,9 @@ game.system('render', function renderSystem(world, _dt) {
       subtitle: `Score: ${state.score} | Press R to restart`,
     });
   }
+
+  // Touch overlay (mobile)
+  drawTouchOverlay(ctx, ctx.canvas.width, ctx.canvas.height, { tapLabel: 'ROT' });
 });
 
 export default game;
